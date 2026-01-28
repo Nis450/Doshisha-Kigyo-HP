@@ -1,0 +1,110 @@
+name: OSV-Scanner Security Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  # Required to upload SARIF file to CodeQL
+  actions: read
+  # Require writing security events to upload SARIF file to security tab
+  security-events: write
+  # Required to fetch code (actions/checkout)
+  contents: read
+
+jobs:
+  # ルートの package-lock.json をスキャン
+  scan-app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install OSV-Scanner
+        run: |
+          curl -sSL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -o osv-scanner
+          chmod +x osv-scanner
+          sudo mv osv-scanner /usr/local/bin/
+
+      - name: Run OSV-Scanner
+        run: |
+          osv-scanner --lockfile=package-lock.json --format=json --output=app-scan.json || true
+        continue-on-error: true
+
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-scan-results
+          path: app-scan.json
+          if-no-files-found: ignore
+
+  # 結果をSlackに送信
+  send-slack-notification:
+    runs-on: ubuntu-latest
+    needs: [scan-app]
+    if: always()
+    steps:
+      - name: Download all scan results
+        uses: actions/download-artifact@v4
+        with:
+          path: scan-results
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Process results and send to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          #!/bin/bash
+          
+          total_vulns=0
+          critical_count=0
+          high_count=0
+          medium_count=0
+          low_count=0
+          packages_list=""
+          
+          for component in app; do
+            json_file="scan-results/${component}-scan-results/${component}-scan.json"
+            
+            if [ -f "$json_file" ]; then
+              vuln_count=$(jq '.results[].packages[].vulnerabilities | length' "$json_file" 2>/dev/null | awk '{s+=$1} END {print s}' || echo "0")
+              total_vulns=$((total_vulns + vuln_count))
+              
+              if [ "$vuln_count" -gt 0 ]; then
+                critical_count=$((critical_count + $(jq -r '[.results[]?.packages[]?.vulnerabilities[]? | select(.database_specific.severity == "CRITICAL")] | length' "$json_file" 2>/dev/null || echo 0)))
+                high_count=$((high_count + $(jq -r '[.results[]?.packages[]?.vulnerabilities[]? | select(.database_specific.severity == "HIGH")] | length' "$json_file" 2>/dev/null || echo 0)))
+                medium_count=$((medium_count + $(jq -r '[.results[]?.packages[]?.vulnerabilities[]? | select(.database_specific.severity == "MEDIUM")] | length' "$json_file" 2>/dev/null || echo 0)))
+                low_count=$((low_count + $(jq -r '[.results[]?.packages[]?.vulnerabilities[]? | select(.database_specific.severity == "LOW")] | length' "$json_file" 2>/dev/null || echo 0)))
+                
+                packages_list=$(jq -r '
+                  [.results[]?.packages[]? | select(.vulnerabilities | length > 0) | .package.name] | unique | .[] | "• " + .
+                ' "$json_file" 2>/dev/null)
+              fi
+            fi
+          done
+          
+          if [ $total_vulns -eq 0 ]; then
+            text="✅ *OSV-Scanner* 脆弱性なし"
+          else
+            if [ $critical_count -gt 0 ] || [ $high_count -gt 0 ]; then
+              text="🚨 *OSV-Scanner* 脆弱性検出: ${total_vulns}件"$'\n'"Critical: ${critical_count} | High: ${high_count} | Medium: ${medium_count} | Low: ${low_count}"
+            else
+              text="⚠️ *OSV-Scanner* 脆弱性検出: ${total_vulns}件"$'\n'"Medium: ${medium_count} | Low: ${low_count}"
+            fi
+            if [ -n "$packages_list" ]; then
+              text="${text}"$'\n\n'"影響パッケージ:"$'\n'"${packages_list}"
+            fi
+          fi
+          
+          payload=$(jq -n --arg text "$text" '{text: $text}')
+          curl -X POST \
+            -H 'Content-Type: application/json' \
+            --data "$payload" \
+            "$SLACK_WEBHOOK_URL"
+
