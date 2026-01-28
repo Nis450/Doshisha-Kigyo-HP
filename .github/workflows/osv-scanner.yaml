@@ -90,12 +90,12 @@ jobs:
           done
           
           if [ $total_vulns -eq 0 ]; then
-            text="✅ *OSV-Scanner* 脆弱性なし"
+            text="✅ *同志社起業部HPOSV-Scanner* 脆弱性なし"
           else
             if [ $critical_count -gt 0 ] || [ $high_count -gt 0 ]; then
-              text="🚨 *OSV-Scanner* 脆弱性検出: ${total_vulns}件"$'\n'"Critical: ${critical_count} | High: ${high_count} | Medium: ${medium_count} | Low: ${low_count}"
+              text="🚨 *同志社起業部HP OSV-Scanner* 脆弱性検出: ${total_vulns}件"$'\n'"Critical: ${critical_count} | High: ${high_count} | Medium: ${medium_count} | Low: ${low_count}"
             else
-              text="⚠️ *OSV-Scanner* 脆弱性検出: ${total_vulns}件"$'\n'"Medium: ${medium_count} | Low: ${low_count}"
+              text="⚠️ *同志社起業部HP OSV-Scanner* 脆弱性検出: ${total_vulns}件"$'\n'"Medium: ${medium_count} | Low: ${low_count}"
             fi
             if [ -n "$packages_list" ]; then
               text="${text}"$'\n\n'"影響パッケージ:"$'\n'"${packages_list}"
